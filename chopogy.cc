@@ -23,10 +23,11 @@ using namespace std;
 #define RATE 44100
 #define TEMPO_CTL 0x12
 #define PITCH_CTL 0x13
-//#define RATE_CTL 0x56
 #define RATE_CTL 0x72
 #define SLICE_START_CTL 0x4a
 #define SLICE_END_CTL 0x47
+#define VOLUME_CTL 0x48
+#define PAN_CTL 0x49
 #define MODE_CTL 0x50
 #define CHAN_CTL 0x52
 #define SCAN_CTL 0x7
@@ -67,8 +68,8 @@ struct fx {
   int tempo = 0;
   int pitch = 0;
   int rate = 0;
-  int volume = 0;
-  int pan = 0;
+  float volume = 1.0;
+  float pan = 0;
 };
 
 // wrapper for pcm type
@@ -337,6 +338,13 @@ void loadSamplePack(struct ctx *ctx, int pack, int channel){
          int pitch = n["pitch"].as<int>();
          ctx->soundTouch[channel].setPitchSemiTones(pitch);
          ctx->fx_chans[channel].pitch = pitch;
+
+         float volume = n["volume"].as<float>();
+         ctx->fx_chans[channel].volume = volume;
+
+         float pan = n["pan"].as<float>();
+         ctx->fx_chans[channel].pan = pan;
+
        }
 
 		}
@@ -507,8 +515,30 @@ void play_sample(ctx *ctx, sample *s, slice *slc, unsigned char thread_id)
     nSamples = BUFF_SIZE/CHANNELS;
     memcpy(buff, s->buffers->at(i), BUFF_SIZE*4);
 
-    // Feed the samples into SoundTouch processor
+
+    // adjust volume and panning
+    float volume = ctx->fx_chans[slc_chan].volume;
+    float pan = ctx->fx_chans[slc_chan].pan;
+    if ((volume != 1.0) || (pan != 0)) {
+      for (int i = 0; i < BUFF_SIZE; i++){
+         buff[i] = buff[i] * volume;
+         if (pan < 0){
+           // pan left
+           if (i%2 == 1){
+             buff[i] = buff[i] * (-1 * pan);
+           }
+         } else if (pan > 0){
+           // pan right
+           if (i%2 == 0){
+             buff[i] = buff[i] * pan;
+           }
+        }
+       }
+    }
+
+
 	  if (isFxActive(ctx->fx_chans[slc_chan])){
+      // Feed the samples into SoundTouch processor
 	    ctx->soundTouch[slc_chan].putSamples(buff, nSamples);
 	    nSamples = ctx->soundTouch[slc_chan].receiveSamples(buff, nSamples);
 	  }
@@ -841,7 +871,21 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
       printf("Rate: %d\n", rate);
     }
 
+    // change volume
+    if(ev->data.control.param == VOLUME_CTL){
+      float volume = ev->data.control.value - 64;
+      volume = 1 - (volume * 5)/100.0;
+      ctx->fx_chans[midi_chan].volume = volume;
+      printf("Volume: %f\n", volume);
+    }
 
+    // change pan
+    if(ev->data.control.param == PAN_CTL){
+      float pan = ev->data.control.value - 64;
+      pan = 1 - (pan * 5)/100.0;
+      ctx->fx_chans[midi_chan].pan = pan;
+      printf("Pan: %f\n", pan);
+    }
 
   } else if (ev->type == SND_SEQ_EVENT_PORT_SUBSCRIBED){
     printf("Connected to midi controller\n");

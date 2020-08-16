@@ -62,6 +62,15 @@ struct sample {
   int bpm;
 };
 
+struct fx {
+  bool active = false;
+  int tempo = 0;
+  int pitch = 0;
+  int rate = 0;
+  int volume = 0;
+  int pan = 0;
+};
+
 // wrapper for pcm type 
 struct pcm_handle {
 	snd_pcm_t *pcm;
@@ -72,9 +81,9 @@ enum chp_program{CHP_BROWSE = 1,
 	CHP_EDIT = 3,
 	CHP_LOAD_SLC = 4,
 	CHP_SAVE_SLC = 5,
-  CHP_SET_FX = 6,
+  CHP_SAVE_PACK= 6,
   CHP_SET_CH = 7,
-	CHP_SAVE_PACK = 8,
+	CHP_SET_FX = 8,
 	CHP_LOAD_PACK,
   CHP_DELETE,
   CHP_REC_START,
@@ -111,11 +120,11 @@ struct ctx {
   // selected sample to edit
 	sample *selectedSnippet;
 
-  // modulation 
-  SoundTouch soundTouch;
+  // modulators
+  SoundTouch soundTouch[MAX_CHANNELS];
 
   //fx_chan
-  int fx_chan;
+  fx fx_chans[MAX_CHANNELS];
 
   // midi 
   snd_seq_t *seq_handle;
@@ -210,6 +219,11 @@ string sampleToYamlFilename(string sampleName, int channel){
 	filepath.append(name);
 	return filepath;
 }
+
+bool isFxActive(fx chan_fx){
+  return chan_fx.tempo != 0 || chan_fx.pitch != 0 || chan_fx.rate != 0;
+}
+
 // re-populate the sample buffers
 void loadSelectedSnippet(ctx *ctx, int midi_chan){
 
@@ -297,6 +311,7 @@ void loadSamplePack(struct ctx *ctx, int pack, int channel){
 		YAML::Node samples = config["samples"];
 		for (std::size_t i=0;i<samples.size();i++) {
       YAML::Node n = samples[i];
+      // incr by 1 since we save as offset
       int channel = n["channel"].as<int>();
       string slices = n["slices"].as<string>();
 			// load sample from snippet
@@ -307,7 +322,23 @@ void loadSamplePack(struct ctx *ctx, int pack, int channel){
 					ctx->selectedSnippet = snip;
 					loadSelectedSnippet(ctx, channel);
 				}
-			}
+      }
+
+      // restore fx
+   		for (int i = 0; i < MAX_CHANNELS; i++){
+         int rate = n["rate"].as<int>();
+         ctx->soundTouch[channel].setRateChange(rate);
+         ctx->fx_chans[channel].rate = rate;
+  
+         int tempo = n["tempo"].as<int>();
+         ctx->soundTouch[channel].setTempoChange(tempo);
+         ctx->fx_chans[channel].tempo = tempo;
+  
+         int pitch = n["pitch"].as<int>();
+         ctx->soundTouch[channel].setPitchSemiTones(pitch);
+         ctx->fx_chans[channel].pitch = pitch;
+       }
+
 		}
 	}
 }
@@ -477,9 +508,9 @@ void play_sample(ctx *ctx, sample *s, slice *slc, unsigned char thread_id)
     memcpy(buff, s->buffers->at(i), BUFF_SIZE*4);
 
     // Feed the samples into SoundTouch processor
-	  if (slc_chan == ctx->fx_chan){
-	    ctx->soundTouch.putSamples(buff, nSamples);
-	    nSamples = ctx->soundTouch.receiveSamples(buff, nSamples);
+	  if (isFxActive(ctx->fx_chans[slc_chan])){
+	    ctx->soundTouch[slc_chan].putSamples(buff, nSamples);
+	    nSamples = ctx->soundTouch[slc_chan].receiveSamples(buff, nSamples);
 	  }
 
     // output
@@ -534,6 +565,7 @@ void play_slice(ctx *ctx, sample *s, int note, int channel, unsigned char thread
 // dump loaded for samples and slices
 void dumpSamplePack(struct ctx *ctx, int pack, int channel){
 
+
   YAML::Emitter out;
 
 	// get loaded samples
@@ -543,6 +575,7 @@ void dumpSamplePack(struct ctx *ctx, int pack, int channel){
 	for (int channel = 0; channel < MAX_CHANNELS; channel++){
 		sample *s = &ctx->samples[channel];
 		string fname = sampleToYamlFilename(s->fname, channel);
+    fx cfx = ctx->fx_chans[channel]; 
 		ifstream fin(fname.c_str());
 		if (fin.good()){
 			out << YAML::BeginMap;
@@ -550,6 +583,16 @@ void dumpSamplePack(struct ctx *ctx, int pack, int channel){
 			out << YAML::Value << channel;
 			out << YAML::Key << "slices";
 			out << YAML::Value << s->fname;
+			out << YAML::Key << "rate";
+			out << YAML::Value << cfx.rate;
+			out << YAML::Key << "tempo";
+			out << YAML::Value << cfx.tempo;
+			out << YAML::Key << "pitch";
+			out << YAML::Value << cfx.pitch;
+			out << YAML::Key << "volume";
+			out << YAML::Value << cfx.volume;
+			out << YAML::Key << "pan";
+			out << YAML::Value << cfx.pan;
 			out << YAML::EndMap;
 		}
 	}
@@ -634,9 +677,9 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 //  	ev->data.note.channel = midi_chan;
 //	}
     if ((ev->type == SND_SEQ_EVENT_NOTEON) && (ev->data.note.velocity > 0)){
-      /* printf("[%d] Note %s: %2x vel(%2x)\n", midi_chan+1, type,
+       printf("[%d] Note %s: %2x vel(%2x)\n", midi_chan+1, type,
           ev->data.note.note,
-          ev->data.note.velocity);*/
+          ev->data.note.velocity);
 
 			if (last_prog == CHP_SET_CH) {
  				// changing channel
@@ -647,7 +690,7 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			// update thread id
 			// this will also stop other running samples
       tid[midi_chan].store(tid[midi_chan].load()+1);
-      ctx->soundTouch.clear();
+      ctx->soundTouch[midi_chan].clear();
 
 			// play sample based on program
 			if (ctx->prog == CHP_BROWSE){
@@ -687,7 +730,6 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
     	midi_chan = ctx->midi_chan_override;
   	}
     // apply fx to whatever chan we are on
-    ctx->fx_chan = midi_chan;
 		if (ctx->prog == CHP_SAVE_SLC){
 		 	// dump slices
       dumpSampleSlices(ctx, midi_chan);
@@ -699,8 +741,6 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 		} else if (ctx->prog == CHP_LOAD_SAMP){
 		 	// load whole sample 
 			loadSelectedSnippet(ctx, midi_chan);
-		} else if (ctx->prog == CHP_SET_FX){
-      ctx->fx_chan = midi_chan;
 		} else if (ctx->prog == CHP_DELETE){
 			// delete selected file
   		string path = "/home/pi/chopogy/samples/";
@@ -711,18 +751,12 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 		}  else if (ctx->prog == CHP_REC_STOP){
 			delete ctx->tracks[ctx->active_rec_track].file;
 			ctx->active_rec_track = -1;
+
     } else if (last_prog == CHP_REC_START){
 			// create a track based on prog value 
 			ctx->active_rec_track = midi_chan;
 			initTrack(ctx, ev->data.control.value, midi_chan);	
-		} else if (last_prog == CHP_SAVE_PACK){
-			// dump pack
-      dumpSamplePack(ctx, ev->data.control.value, midi_chan);
-		} else if (last_prog == CHP_LOAD_PACK){
-			// load pack
-      loadSamplePack(ctx, ev->data.control.value, midi_chan);
 		}
-
   } else if(ev->type == SND_SEQ_EVENT_CONTROLLER) {
     printf("Control:  %2x val(%2x)\n", ev->data.control.param,
         ev->data.control.value);
@@ -733,9 +767,24 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			ctx->midi_chan_override = ev->data.control.value;
 		}
 
+    if (ev->data.control.param == CHP_SAVE_PACK){
+        	// dump pack
+          dumpSamplePack(ctx, ev->data.control.value, ev->data.note.channel);
+          ctx->prog = CHP_EDIT;
+          return NULL;
+    }
+
+    if (ev->data.control.param == CHP_LOAD_PACK){
+        	// dump pack
+          ctx->prog = CHP_LOAD_SLC;
+          loadSamplePack(ctx, ev->data.control.value, ev->data.note.channel);
+          ctx->prog = CHP_EDIT;
+          return NULL;
+    }
+
 		// snippet scanner
+	  int midi_chan = ev->data.note.channel;
 		if (ev->data.control.param == SCAN_CTL){
-	  		int midi_chan = ev->data.note.channel;
 			  // no matter how many notes we have
 				// sample will be spread across them all
 				int index = ev->data.control.value % ctx->snippets.size();
@@ -771,21 +820,24 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
     // change tempo at same pitch
     if(ev->data.control.param == TEMPO_CTL){
       int tempo = ev->data.control.value - 64;
+      ctx->soundTouch[midi_chan].setTempoChange(tempo);
+      ctx->fx_chans[midi_chan].tempo = tempo;
       printf("Tempo: %d\n", tempo);
-      ctx->soundTouch.setTempoChange(tempo);
     }
 
     // change pitch	at same tempo 
     if(ev->data.control.param == PITCH_CTL){
       int pitch = ev->data.control.value/4 - 16;
+      ctx->soundTouch[midi_chan].setPitchSemiTones(pitch);
+      ctx->fx_chans[midi_chan].pitch = pitch;
       printf("Pitch: %d\n", pitch);
-      ctx->soundTouch.setPitchSemiTones(pitch);
     }
 
 		// change both tempo and pitch
     if(ev->data.control.param == RATE_CTL){
       int rate = ev->data.control.value - 64;
-      ctx->soundTouch.setRateChange(rate);
+      ctx->soundTouch[midi_chan].setRateChange(rate);
+      ctx->fx_chans[midi_chan].rate = rate;
       printf("Rate: %d\n", rate);
     }
 
@@ -869,7 +921,6 @@ int main(const int nParams, const char * const paramStr[])
   struct ctx ctx;
   ctx.prog = CHP_BROWSE;
 	ctx.midi_chan_override = -1;
-	ctx.fx_chan = 0;
   ctx.active_rec_track = -1;
 	ctx.num_pcm_handles = params->numHandles;
 	if (ctx.num_pcm_handles > MAX_PCM_HANDLES){
@@ -897,7 +948,9 @@ int main(const int nParams, const char * const paramStr[])
       return -1;
 
     // Setup the 'SoundTouch' object for processing the sound
-    setup(&ctx.soundTouch);
+	  for (int i = 0; i < MAX_CHANNELS; i++){
+      setup(&ctx.soundTouch[i]);
+    }
 
     // Run controller 
     while (1) {

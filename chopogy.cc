@@ -21,7 +21,7 @@ using namespace std;
 #define BUFF_SIZE 2048
 #define PCM_DEVICE "default"
 #define RATE 44100
-#define TEMPO_CTL 0x12 
+#define TEMPO_CTL 0x12
 #define PITCH_CTL 0x13
 //#define RATE_CTL 0x56
 #define RATE_CTL 0x72
@@ -35,9 +35,9 @@ using namespace std;
 #define SOUNDTOUCH_INTEGER_SAMPLES 1
 #define SET_STREAM_TO_BIN_MODE(f) {}
 #define MAX_PCM_HANDLES 8
-#define MAX_CHANNELS 16 
-#define MAX_SLICES 88 
-#define MAX_TRACKS 32 
+#define MAX_CHANNELS 16
+#define MAX_SLICES 88
+#define MAX_TRACKS 32
 
 
 struct slice {
@@ -71,7 +71,7 @@ struct fx {
   int pan = 0;
 };
 
-// wrapper for pcm type 
+// wrapper for pcm type
 struct pcm_handle {
 	snd_pcm_t *pcm;
 };
@@ -111,7 +111,7 @@ struct ctx {
   // sample browser
   vector<sample *> snippets;
 
-  // active samples 
+  // active samples
   sample samples[MAX_CHANNELS];
 
   // manual override for midi chan
@@ -126,7 +126,7 @@ struct ctx {
   //fx_chan
   fx fx_chans[MAX_CHANNELS];
 
-  // midi 
+  // midi
   snd_seq_t *seq_handle;
 
 	// mixer
@@ -140,7 +140,7 @@ struct ctx {
 // thread id running
 atomic_uchar tid[MAX_CHANNELS];
 
-static const char _helloText[] = 
+static const char _helloText[] =
 "\n"
 "   Chopage v%s -  Copyright (c) Dichtomas Monk\n"
 "=========================================================\n";
@@ -166,8 +166,8 @@ int openFiles(WavInFile **inFile, struct ctx *ctx)
         string p(path);
         p.append(fname);
         WavInFile *wf = new WavInFile(p.c_str());
-        
-        // init sample 
+
+        // init sample
         struct sample *s = new sample();
         s->file = wf;
         s->buffers = new vector<SAMPLETYPE*>(0);
@@ -240,7 +240,7 @@ void loadSelectedSnippet(ctx *ctx, int midi_chan){
 
 
   // unload sample currently loaded
-  // for selected channel 
+  // for selected channel
   sample *chan_sample = &ctx->samples[midi_chan];
   if ( chan_sample->buffers != NULL){
 		delete chan_sample->buffers;
@@ -253,14 +253,14 @@ void loadSelectedSnippet(ctx *ctx, int midi_chan){
       chan_sample->slices[i].end_offset = 0;
       chan_sample->slices[i].channel = 0;
     }
-  } 
+  }
  	chan_sample->buffers = new vector<SAMPLETYPE*>(0);
 
 
   // init bpm analyzer
   int nChannels = (int)snip->file->getNumChannels();
   BPMDetect bpm(nChannels, snip->file->getSampleRate());
- 
+
  	// read from snippet file pointer to channel sample
 	snip->file->rewind();
   while (snip->file->eof() == 0){
@@ -329,11 +329,11 @@ void loadSamplePack(struct ctx *ctx, int pack, int channel){
          int rate = n["rate"].as<int>();
          ctx->soundTouch[channel].setRateChange(rate);
          ctx->fx_chans[channel].rate = rate;
-  
+
          int tempo = n["tempo"].as<int>();
          ctx->soundTouch[channel].setTempoChange(tempo);
          ctx->fx_chans[channel].tempo = tempo;
-  
+
          int pitch = n["pitch"].as<int>();
          ctx->soundTouch[channel].setPitchSemiTones(pitch);
          ctx->fx_chans[channel].pitch = pitch;
@@ -368,38 +368,38 @@ snd_pcm_t* initPCM(snd_pcm_stream_t stream, const char *device){
         SND_PCM_ACCESS_RW_INTERLEAVED) < 0)
     printf("ERROR: Can't set access. %s\n", snd_strerror(pcm));
 
-  if (pcm = snd_pcm_hw_params_set_channels(pcm_handle, params, CHANNELS) < 0) 
+  if (pcm = snd_pcm_hw_params_set_channels(pcm_handle, params, CHANNELS) < 0)
     printf("ERROR: Can't set channels number. %s\n", snd_strerror(pcm));
 
   unsigned int rate = RATE;
-  if (pcm = snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rate, 0) < 0) 
+  if (pcm = snd_pcm_hw_params_set_rate_near(pcm_handle, params, &rate, 0) < 0)
     printf("ERROR: Can't set rate. %s\n", snd_strerror(pcm));
 
 
 	snd_pcm_uframes_t val = 0;
-	snd_pcm_hw_params_get_buffer_size_max(params, &val); 
+	snd_pcm_hw_params_get_buffer_size_max(params, &val);
   int ret = snd_pcm_hw_params_set_buffer_size(pcm_handle, params, val/2);
   if (ret < 0)
     printf("ERROR: Can't set buffersize. %d, %s\n", ret,  snd_strerror(ret));
 
 
   int dir = 0;
-	snd_pcm_hw_params_get_period_size_min(params, &val, &dir); 
+	snd_pcm_hw_params_get_period_size_min(params, &val, &dir);
   ret = snd_pcm_hw_params_set_period_size(pcm_handle, params, val, dir);
   if (ret < 0)
     printf("ERROR: Can't set period size. %d, %s\n", ret,  snd_strerror(ret));
 
 
 	unsigned int period = 0;
-	snd_pcm_hw_params_get_period_time_min(params, &period, &dir); 
-  if (pcm = snd_pcm_hw_params_set_period_time(pcm_handle, params, period, dir) < 0) 
+	snd_pcm_hw_params_get_period_time_min(params, &period, &dir);
+  if (pcm = snd_pcm_hw_params_set_period_time(pcm_handle, params, period, dir) < 0)
     printf("ERROR: Can't set period time. %s\n", snd_strerror(pcm));
 
   /* Write parameters */
   if (pcm = snd_pcm_hw_params(pcm_handle, params) < 0)
     printf("ERROR: Can't set harware parameters. %s\n", snd_strerror(pcm));
 
-  snd_pcm_uframes_t   	buffer_size; 
+  snd_pcm_uframes_t   	buffer_size;
   snd_pcm_uframes_t   	period_size;
   snd_pcm_get_params(pcm_handle, &buffer_size, &period_size);
   printf("PCM OPENED WITH: %ld buffer, %ld period\n", buffer_size, period_size);
@@ -413,7 +413,7 @@ snd_pcm_t* initPCM(snd_pcm_stream_t stream, const char *device){
   return pcm_handle;
 }
 
-// Sets the 'SoundTouch' object up according to input file sound format & 
+// Sets the 'SoundTouch' object up according to input file sound format &
 // command line parameters
 void setup(SoundTouch *pSoundTouch)
 {
@@ -461,7 +461,7 @@ snd_pcm_t* pcm_handle_i(ctx *ctx, int index) {
 	return ctx->pcm_handles[index].pcm;
 }
 
-// pass in the interval 
+// pass in the interval
 void play_sample(ctx *ctx, sample *s, slice *slc, unsigned char thread_id)
 {
 
@@ -501,7 +501,7 @@ void play_sample(ctx *ctx, sample *s, slice *slc, unsigned char thread_id)
         // for help with better editing
 				slc->end = i-10;
 			}
-      return;  
+      return;
     }
 
     nSamples = BUFF_SIZE/CHANNELS;
@@ -575,7 +575,7 @@ void dumpSamplePack(struct ctx *ctx, int pack, int channel){
 	for (int channel = 0; channel < MAX_CHANNELS; channel++){
 		sample *s = &ctx->samples[channel];
 		string fname = sampleToYamlFilename(s->fname, channel);
-    fx cfx = ctx->fx_chans[channel]; 
+    fx cfx = ctx->fx_chans[channel];
 		ifstream fin(fname.c_str());
 		if (fin.good()){
 			out << YAML::BeginMap;
@@ -600,9 +600,9 @@ void dumpSamplePack(struct ctx *ctx, int pack, int channel){
   out << YAML::EndMap;
   printf("---\n%s\n", out.c_str());
 
-	// dump to file 
+	// dump to file
  	ofstream pack_file;
-	string fname = packName(pack, channel); 
+	string fname = packName(pack, channel);
 	cout << "Pack: "<<fname << endl;
   pack_file.open (fname.c_str());
   pack_file << out.c_str();
@@ -646,7 +646,7 @@ void dumpSampleSlices(struct ctx *ctx, int channel){
 	out << YAML::EndMap;
   printf("---\n%s\n", out.c_str());
 
-	// dump to file 
+	// dump to file
  	ofstream slice_file;
 	string fname = sampleToYamlFilename(s->fname, channel);
   slice_file.open (fname.c_str());
@@ -698,12 +698,12 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			  // no matter how many notes we have
 				// sample will be spread across them all
 				int index = ev->data.note.note % ctx->snippets.size();
-  			// update selected sample 
+  			// update selected sample
   			ctx->selectedSnippet = ctx->snippets.at(index);
 				thread t1(play_sample, ctx, ctx->selectedSnippet, nullptr, tid[midi_chan].load());
 				t1.detach();
 			} else {
-  			// update selected for channel 
+  			// update selected for channel
   			sample *s = &ctx->samples[midi_chan];
         // do not try and unloaded sample
         if (s->buffers == NULL){
@@ -739,7 +739,7 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 		 	// load slices
 			loadSelectedSnippet(ctx, midi_chan);
 		} else if (ctx->prog == CHP_LOAD_SAMP){
-		 	// load whole sample 
+		 	// load whole sample
 			loadSelectedSnippet(ctx, midi_chan);
 		} else if (ctx->prog == CHP_DELETE){
 			// delete selected file
@@ -753,7 +753,7 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			ctx->active_rec_track = -1;
 
     } else if (last_prog == CHP_REC_START){
-			// create a track based on prog value 
+			// create a track based on prog value
 			ctx->active_rec_track = midi_chan;
 			initTrack(ctx, ev->data.control.value, midi_chan);	
 		}
@@ -788,7 +788,7 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			  // no matter how many notes we have
 				// sample will be spread across them all
 				int index = ev->data.control.value % ctx->snippets.size();
-  			// update selected sample 
+  			// update selected sample
   			ctx->selectedSnippet = ctx->snippets.at(index);
         cout<< "Play: "<< ctx->selectedSnippet->fname << endl;
 				thread t1(play_sample, ctx, ctx->selectedSnippet, nullptr, tid[midi_chan].load());
@@ -825,7 +825,7 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
       printf("Tempo: %d\n", tempo);
     }
 
-    // change pitch	at same tempo 
+    // change pitch	at same tempo
     if(ev->data.control.param == PITCH_CTL){
       int pitch = ev->data.control.value/4 - 16;
       ctx->soundTouch[midi_chan].setPitchSemiTones(pitch);
@@ -874,7 +874,7 @@ void detectBPM(WavInFile *inFile, RunParameters *params)
 
   nChannels = (int)inFile->getNumChannels();
 
-  // Process the 'inFile' in small blocks, repeat until whole file has 
+  // Process the 'inFile' in small blocks, repeat until whole file has
   // been processed
   while (inFile->eof() == 0)
   {
@@ -930,9 +930,9 @@ int main(const int nParams, const char * const paramStr[])
 	// greetings
   fprintf(stderr, _helloText, SoundTouch::getVersionString());
 
-  try 
+  try
   {
-		// Open pcm handles 
+		// Open pcm handles
 		for (int i = 0; i < ctx.num_pcm_handles; i++){
 			ctx.pcm_handles[i].pcm = initPCM(SND_PCM_STREAM_PLAYBACK, params->pcmDevice);
 		 if (ctx.pcm_handles[i].pcm == 0)
@@ -952,14 +952,14 @@ int main(const int nParams, const char * const paramStr[])
       setup(&ctx.soundTouch[i]);
     }
 
-    // Run controller 
+    // Run controller
     while (1) {
       readMidi(&ctx);
     }
 
     fprintf(stderr, "Done!\n");
-  } 
-  catch (const runtime_error &e) 
+  }
+  catch (const runtime_error &e)
   {
     // An exception occurred during processing, display an error message
     fprintf(stderr, "%s\n", e.what());

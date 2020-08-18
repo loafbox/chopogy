@@ -35,7 +35,7 @@ using namespace std;
 #define CHANNELS 2
 #define SOUNDTOUCH_INTEGER_SAMPLES 1
 #define SET_STREAM_TO_BIN_MODE(f) {}
-#define MAX_PCM_HANDLES 8
+#define MAX_PCM_HANDLES 24
 #define MAX_CHANNELS 16
 #define MAX_SLICES 88
 #define MAX_TRACKS 32
@@ -83,18 +83,18 @@ enum chp_program{CHP_BROWSE = 1,
 	CHP_LOAD_SLC = 4,
 	CHP_SAVE_SLC = 5,
   CHP_SAVE_PACK= 6,
-  CHP_SET_CH = 7,
-	CHP_SET_FX = 8,
-	CHP_LOAD_PACK,
+  CHP_REC_START = 7,
+	CHP_REC_STOP = 8,
+	CHP_LOAD_PACK = 9,
+  CHP_SET_CH,
+	CHP_SET_FX,
   CHP_DELETE,
-  CHP_REC_START,
-	CHP_REC_STOP,
 	CHP_LOAD_SAMP};
 
 struct track {
   WavOutFile *file;
 	int num;
-	
+  bool armed = false;	
 };
 
 struct ctx {
@@ -132,9 +132,6 @@ struct ctx {
 
 	// mixer
 	track tracks[MAX_TRACKS];
-
-	// active recording track
-	int active_rec_track;
 
 };
 
@@ -199,14 +196,26 @@ int openFiles(WavInFile **inFile, struct ctx *ctx)
   return 0;
 }
 
-void initTrack( ctx *ctx, int songId, int channel){
-	string sampleName =  ctx->samples[channel].fname;
-	string filepath = "/home/pi/chopogy/songs/"+to_string(songId)+"/track-";
-	filepath.append(to_string(channel)+"_"+sampleName+".wav");
-	// channel is used as trackNum
-	ctx->tracks[channel].num = channel;
-	ctx->tracks[channel].file = new WavOutFile(filepath.c_str(), RATE, 32, CHANNELS);
-	cout << "Opened: "<<filepath<<" for writing"<<endl;
+void initTracks( ctx *ctx, int songId, int channel){
+	for (int channel = 0; channel < MAX_CHANNELS; channel++){
+    if (ctx->tracks[channel].armed){
+      string sampleName =  ctx->samples[channel].fname;
+      string filepath = "/home/pi/src/sequencer/songs/"+to_string(songId)+"/track-";
+      filepath.append(to_string(channel)+"_"+sampleName+".wav");
+      // channel is used as trackNum
+      ctx->tracks[channel].num = channel;
+      ctx->tracks[channel].file = new WavOutFile(filepath.c_str(), RATE, 32, CHANNELS);
+      cout << "Opened: "<<filepath<<" for writing"<<endl;
+    }
+  }
+}
+
+void closeTracks(ctx *ctx){
+	for (int channel = 0; channel < MAX_CHANNELS; channel++){
+    if (ctx->tracks[channel].armed){
+      delete ctx->tracks[channel].file;
+    }
+  }
 }
 
 string packName(int pack, int channel){
@@ -543,15 +552,16 @@ void play_sample(ctx *ctx, sample *s, slice *slc, unsigned char thread_id)
 	    nSamples = ctx->soundTouch[slc_chan].receiveSamples(buff, nSamples);
 	  }
 
-    // output
-  if ((err = snd_pcm_writei(pcm, buff, nSamples)) < 0){
-    printf("write err %s (%d) \n", snd_strerror(err), err);
-  	snd_pcm_prepare(pcm);
-  } else {
-		if (err != nSamples){
-   	 snd_pcm_prepare(pcm);
-	  }
-	}
+    if ((err = snd_pcm_writei(pcm, buff, nSamples)) < 0){
+      printf("write err %s (%d) \n", snd_strerror(err), err);
+    	snd_pcm_prepare(pcm);
+    } else {
+    	if (err != nSamples){
+     	  snd_pcm_prepare(pcm);
+      } else if (ctx->prog == CHP_REC_START) {
+        ctx->tracks[slc_chan].file->write(buff, BUFF_SIZE);
+      }
+    }
   }
  	snd_pcm_prepare(pcm);
 }
@@ -700,6 +710,10 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
   if ((ev->type == SND_SEQ_EVENT_NOTEON)||(ev->type == SND_SEQ_EVENT_NOTEOFF)) {
     const char *type = (ev->type == SND_SEQ_EVENT_NOTEON) ? "on " : "off";
 	  int midi_chan = ev->data.note.channel;
+
+    // Ensure all used trakcs are armed
+    ctx->tracks[midi_chan].armed = true;
+
 		// Midi chan override can be used for controllers that only
     // operator on single channel
 //	if((midi_chan != 1) && (ctx->midi_chan_override != -1)){
@@ -778,15 +792,9 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
       path.append(".wav");
       cout<<"Remove: "<<path<<endl;
 			remove(path.c_str());
-		}  else if (ctx->prog == CHP_REC_STOP){
-			delete ctx->tracks[ctx->active_rec_track].file;
-			ctx->active_rec_track = -1;
-
-    } else if (last_prog == CHP_REC_START){
-			// create a track based on prog value
-			ctx->active_rec_track = midi_chan;
-			initTrack(ctx, ev->data.control.value, midi_chan);	
-		}
+		} else if (ctx->prog == CHP_REC_STOP){
+      closeTracks(ctx);
+    }
   } else if(ev->type == SND_SEQ_EVENT_CONTROLLER) {
     printf("Control:  %2x val(%2x)\n", ev->data.control.param,
         ev->data.control.value);
@@ -797,9 +805,10 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
 			ctx->midi_chan_override = ev->data.control.value;
 		}
 
+	  int midi_chan = ev->data.note.channel;
     if (ev->data.control.param == CHP_SAVE_PACK){
         	// dump pack
-          dumpSamplePack(ctx, ev->data.control.value, ev->data.note.channel);
+          dumpSamplePack(ctx, ev->data.control.value, midi_chan);
           ctx->prog = CHP_EDIT;
           return NULL;
     }
@@ -807,13 +816,18 @@ snd_seq_event_t *readMidi(struct ctx *ctx)
     if (ev->data.control.param == CHP_LOAD_PACK){
         	// dump pack
           ctx->prog = CHP_LOAD_SLC;
-          loadSamplePack(ctx, ev->data.control.value, ev->data.note.channel);
+          loadSamplePack(ctx, ev->data.control.value, midi_chan);
           ctx->prog = CHP_EDIT;
           return NULL;
     }
+    if (ev->data.control.param == CHP_REC_START){
+      ctx->prog = CHP_REC_START;
+			// open tracks for each channel in use
+			initTracks(ctx, ev->data.control.value, midi_chan);	
+      return NULL;
+		}
 
 		// snippet scanner
-	  int midi_chan = ev->data.note.channel;
 		if (ev->data.control.param == SCAN_CTL){
 			  // no matter how many notes we have
 				// sample will be spread across them all
@@ -965,11 +979,11 @@ int main(const int nParams, const char * const paramStr[])
   struct ctx ctx;
   ctx.prog = CHP_BROWSE;
 	ctx.midi_chan_override = -1;
-  ctx.active_rec_track = -1;
 	ctx.num_pcm_handles = params->numHandles;
 	if (ctx.num_pcm_handles > MAX_PCM_HANDLES){
 		ctx.num_pcm_handles = MAX_PCM_HANDLES;
 	}
+	ctx.num_pcm_handles = 24;
 
 	// greetings
   fprintf(stderr, _helloText, SoundTouch::getVersionString());
